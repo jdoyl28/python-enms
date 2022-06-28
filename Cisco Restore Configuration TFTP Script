@@ -1,0 +1,184 @@
+import netmiko
+from datetime import datetime, date
+from netmiko import ConnectHandler
+import paramiko
+
+todays_date = date.today()
+
+#create dictionary that will house results
+result = {}
+
+######## functions #########
+
+#function for later comparison, reference connection to tftp server(s) section
+def recent_back(values_list):
+    values_temp = [0,1,]
+    global current_tftp
+    global current_backup
+    values_temp[0]=datetime.strptime((values_list[0][-16:-6]),"%m-%d-%Y")
+    values_temp[1]=datetime.strptime((values_list[1][-16:-6]),"%m-%d-%Y")
+    if values_temp[0] > values_temp[1]:
+        current_backup = values_list[0]
+        current_tftp = tftp_server_list[0]
+    elif values_temp[0] < values_temp[1]:
+        current_backup = values_list[1]
+        current_tftp = tftp_server_list[1]
+    elif values_temp[0] == values_temp[1]:
+        current_backup = values_list[0]
+        current_tftp = tftp_server_list[0]
+    else:
+        print("Error: backup date comparison failed")
+    return current_backup, current_tftp
+
+######## tftp servers ##########
+tftp_1 = {
+"host":"172.16.1.16",
+"device_type":"linux",
+"username":"nie_admin",
+"password":"56tfcde34",
+"port":22,
+"verbose":True
+}
+
+tftp_2 = {
+"host":"172.16.1.36",
+"device_type":"linux",
+"username":"nie_admin",
+"password":"56tfcde34",
+"port":22,
+"verbose":True
+    }
+
+#Create list of tftp dictionaries
+tftp_list = [tftp_1, tftp_2,]
+
+
+#eNMS-supplied object.attribute
+hostname = device.name
+
+#empty dictionary for later use
+tftp_backups = {}
+#empty dictionary for later use
+tftp_backup_final = {}
+
+tftp1_fp = "/srv/tftp/"
+
+tftp2_fp = "/volume1/PM-3615-DIR01/TFTP/"
+
+
+######### connect to tftp servers and collect latest device backup files ##########
+
+#for all tftp servers listed in tftp_list, use below paramiko parameters
+for tftp in tftp_list:
+    ip=tftp["host"]
+    port=22
+    username=tftp["username"]
+    password=tftp["password"]
+
+    ssh=paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(ip, port, username, password)
+
+    #Determine if tftp server is server 1 or 2 to select appropriate directory path to locate tftp backup files
+    #ls command will list files in directory and pass as list to Lines variable
+    if tftp["host"] == tftp_1["host"]:
+        stdin, stdout, stderr = ssh.exec_command("cd {} && ls".format(tftp1_fp))
+    if tftp["host"] == tftp_2["host"]:
+        stdin, stdout, stderr = ssh.exec_command("cd {} && ls".format(tftp2_fp))
+    lines = stdout.readlines()
+
+    #Create empty list for use in targeted list of backup files
+    backup_list=[]
+
+    #Only select items in list that match the hostname of the device, using the file name of the backup file and remove extra chars
+    for line in lines:
+        if hostname or hostname.lower() or hostname.upper() in line:
+            backup_list.append(line.replace("\n",""))
+
+    #Create empty list for use in targeted list of backup files
+    recent_backups = []
+    
+    #Only select items in list that match the current year using indexing and string line comprehension
+    for backup in backup_list:
+        if backup[-10:-6] == str(todays_date.year):
+            #append (add) the backup if the date year matches the current year
+            recent_backups.append(backup)
+
+    #if recent_backups list does contain item(s), then perform next steps
+    if recent_backups:
+        #Sort the list, which will reorganize based on title (all chars are same except the date)
+        recent_backups.sort(reverse=True)
+        #Add dictionary key/value to tftp_backup_final dictionary and place 0 (item with newest date from list of backups)
+        tftp_backups = {tftp["host"]:recent_backups[0]}
+        #Use tftp_backups dict to update tftp_backup_final dictionary
+        tftp_backup_final.update(tftp_backups)
+        
+#extract the values from the key/value pairs in tftp_backup_final dictionary    
+tftp_backup_values = tftp_backup_final.values()
+tftp_server_values = tftp_backup_final.keys()
+#convert the dictionary values to a list
+values_list = list(tftp_backup_values)
+tftp_server_list = list(tftp_server_values)
+
+#if there are no backups listed, print an error message
+if not values_list:
+	result = "Error: device '{}' does not have any backups available".format(hostname)
+	results["success"] = False
+	results["result"] = result
+	raise SystemExit
+#if there is only one backup listed, use the only backup to proceed
+elif len(values_list) < 2:
+    current_backup = values_list[0]
+    current_tftp = tftp_server_list[0]
+#if there are two values in the list (e.g., two backups: one from each tftp server), then this results in boolean true
+elif len(values_list) >= 2:
+    #compare the two backup names for the most current/recent date
+    recent_back(values_list)
+#if any of the above operations couldn't proceed, print an error message
+else:
+    result = "Error: operation failed"
+    results["success"] = False
+    results["result"] = result
+    raise SystemExit
+
+#based on which tftp server hosts the most recent backup, assign the appropriate drive path
+if current_tftp == tftp_1["host"]:
+    tftp_fp = tftp1_fp
+if current_tftp == tftp_2["host"]:
+    tftp_fp = ""
+
+######### Connecting to target network device and restore from backup file ##########
+
+device = {
+  	"host":device.ip_address,
+	"device_type":device.netmiko_driver,
+	"username":"username",
+	"password":"password",
+}    
+
+cmd_list = [
+"copy tftp: running-config",
+current_tftp,
+tftp_fp+current_backup,
+"\n",
+"write mem",
+]
+
+#Netmiko
+#connect to network device and send the commands in cmd_list, then disconnect
+with ConnectHandler(**device) as net_connect:
+    result = net_connect.find_prompt()
+    result += net_connect.enable()
+    result += net_connect.send_multiline_timing(cmd_list)
+
+net_connect.disconnect()
+
+######Results Section########
+#results dictionary returns captured CLI from targeted device
+#result displays boolean whether an error or permission denied appear in result
+if 'Permission denied' or 'Error' not in result:
+    results["success"] = True
+else:
+    results["success"] = False
+
+results["result"] = result
