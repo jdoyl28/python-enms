@@ -1,0 +1,73 @@
+import netmiko
+from netmiko import ConnectHandler
+
+#retrieve hostname from variable (device) provided by eNMS
+hostname = device.name
+
+#dictionary to use with Netmiko
+device = {
+  "host":device.ip_address,
+  "device_type":device.netmiko_driver,
+  "port":"22",
+  "username":"username",
+  "password":"password",
+}
+
+#create list to be used later
+output = []
+#create list to be used later
+result = []
+
+
+get_result("#05 Cisco Audit Compliance Check")
+#Variable provided by compliance audit script in workflow
+failed_checks = get_result("#05 Cisco Audit Compliance Check")["Failed"]
+#Variable provided by compliance audit script in workflow
+file_path = get_result("#05 Cisco Audit Compliance Check")["Audit_File"]
+
+#create empty dictionary that will house check #/check text key/value pair
+check_rem = {}
+#for each failed check in failed checks list
+for check in failed_checks:
+    #open the file path to the server hosting the text file with check and remediation info
+    with open(file_path) as lines:
+        #for each line of text in the text file
+        for line in lines:
+            #if the line containins "check_#_remediation then do:
+            if f"{check[0:7]}_remediation" in line:
+                #create a key/value in the dictionary
+                check_rem[check[0:7]] = []
+                #create new variable line_temp and assign next line from the text file
+                line_temp = next(lines)
+                #while the next line in the text file does not contain "_check", continue to:
+                while "_check" not in line_temp:
+                    #first effort should be to append the line of text to the dictionary value from the key previously created
+                    try:
+                        check_rem[check[0:7]].append(line_temp.strip('\n'))
+                        #since the previous line was appended, assign next line to line_temp variable
+                        line_temp = next(lines)
+                    #however, if the while loop presents a StopIteration message indicating it detected "_check" in the line, then:
+                    except StopIteration:
+                        #break from the while loop and continue on
+                        break
+#"key" and "value" are variable names, representing the key/value pairs found within the dictionary
+with ConnectHandler(**device) as net_connect:
+    #assigns the keys and values to separate variables, retured from the check_rem dictionary
+    for key_list, value_list in check_rem.items():
+        #The output variable is assigned the result of sending line(s) of remediation text for one check_remediation
+        #send_config_set is executed through a Netmiko connection and automatically enters and exits "conf t" in the target device
+        output = net_connect.send_config_set(value_list)
+        #The output variable will ultimately capture the syntax occurring on the target device, including the commands sent and response from the device
+        #Result is a list the captured output will be appended to
+        result.append(output)
+    #once all changes are made, Netmiko will save the running configuration to memory
+    output = net_connect.save_config()
+    #add the result of the write mem to result list
+    result.append(output)
+    
+
+if "error" in output:
+    results["success"] = False
+else:
+    results["success"] = True
+results["result"] = result  
