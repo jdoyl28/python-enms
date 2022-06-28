@@ -1,0 +1,154 @@
+###########################################################
+#############Cisco Compliance Audit Script#################
+###########################################################
+
+import netmiko
+import paramiko
+import re
+import scp
+from paramiko import SSHClient
+from netmiko import ConnectHandler
+from scp import SCPClient
+
+#create empty dictionary for later use
+result = {}
+#retrieve hostname from variable (device) provided by eNMS
+hostname = device.name
+
+#dictionary to use with Netmiko
+device = {
+  "host":device.ip_address,
+  "device_type":device.netmiko_driver,
+  "port":"22",
+  "username":"username",
+  "password":"password",
+}
+
+###########################################################
+##########################FUNCTIONS########################
+###########################################################
+
+#function to use device model and version and find applicable compliance file for comparison
+def dev_ver(vendor,model,version):
+    #Paramiko parameters
+    ip="1192.168.5.15"
+    port=22
+    username="username"
+    password="password"
+    global file_path
+    #Paramiko SSH
+    ssh=paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(ip, port, username, password)
+    #audit checks file path
+    device_info = f"{vendor}_{model}_{version}.txt"
+    file_path = '/opt/audit_checks/{}'.format(device_info)
+    ssh.close
+    
+#function convert audit file to dictionary
+def audit_dict():
+    global audit_checks
+    try:
+        with open (file_path) as lines:
+          for line in lines:
+            if "_check" in line:
+              audit_checks[line.strip("\n")] = next(lines).strip("\n")
+    except:
+        result = f"Could not locate an audit checks file applicable to device {hostname}"
+        results["success"] = False
+        results["result"] = result
+        raise SystemExit
+
+#function Netmiko connection/command(s) to network device
+def net_miko(command1,command2):
+    #arguments passed from function call (show commands) turned into list of commands
+    cmd_list = [
+        command1,
+        command2,
+        ]
+    for cmd in cmd_list:
+        with ConnectHandler(**device) as net_connect:
+            cmd_result = net_connect.send_command(cmd)
+            result[cmd] = cmd_result
+    net_connect.disconnect()
+    
+
+
+#function carve out vendor info from network device sh vers results
+    #from network device sh vers results, get vendor software version
+def find_ver(result):
+    global dev_vendor
+    global dev_ver_final
+    global dev_mod_final
+    if carve_result[0:5]=="CISCO":
+        dev_vendor = carve_result[0:5]
+    match=(re.search("VERSION ",str(carve_result)))    
+    match_start = match.span()[0]
+    match_stop = match.span()[1]+3
+    dev_ver_raw = str(carve_result)[match_start:match_stop]
+    dev_ver_final = dev_ver_raw+'X'
+    dev_ver_final = dev_ver_final.replace(" ","_")
+    #from network device sh vers results, get device model 
+    match2_indx1=(re.search('\(',str(carve_result)))
+    match2_indx2=(re.search('\),',str(carve_result)))
+    match2_start = match2_indx1.span()[0]
+    match2_end = match2_indx2.span()[1]
+    dev_mod = str(carve_result)[match2_start+1:match2_end-2]
+    i=["-","_"]
+    for i in i:
+        if i in dev_mod:
+            dev_mod_final = dev_mod.split(i)[0]
+
+
+
+ 
+###################################################################
+###################################################################
+###################################################################
+
+
+#call function to connect to network device via Netmiko and get sh vers
+net_miko("show version","show run")
+
+
+#call function to carve out info from device sh vers
+carve_result = list(result.values())[0].upper()
+find_ver(carve_result)
+
+
+#using network device sh vers results,call functions
+dev_ver(dev_vendor,dev_mod_final,dev_ver_final)
+
+#function to convert copied audit file from server into a dictionary for later comparison
+audit_dict()
+
+
+#extract 'show run' text from dictionary values and assign to variable (str)
+show_run = list(result.values())[1]
+#extract audit checks text syntax from dictionary values and assign to variable (list)
+checks = list(audit_checks.values())
+
+#create list to append passed checks
+Passed = []
+#create list to append failed checks
+Failed = []
+
+#run checks against network device
+#if check (str) is in the string show_run, then the check passess
+#if checks is not in show_run, then check fails because the configuration item is missing
+for check in checks:
+    if check in show_run:
+        if check in audit_checks.values() and checks:
+            indx_num = checks.index(check)
+            Passed.append(list(audit_checks.keys())[indx_num])
+    elif check not in show_run:
+        if check in audit_checks.values() and checks:
+            indx_num = checks.index(check)
+            Failed.append(list(audit_checks.keys())[indx_num])
+
+
+#add script results as dictionary items so they appear in the service run results
+results["Audit_File"] = file_path         
+results["Passed"] = Passed
+results["Failed"] = Failed            
+results["result"] = result
