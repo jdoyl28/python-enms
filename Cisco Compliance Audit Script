@@ -31,7 +31,7 @@ device = {
 #function to use device model and version and find applicable compliance file for comparison
 def dev_ver(vendor,model,version):
     #Paramiko parameters
-    ip="1192.168.5.15"
+    ip="192.168.5.15"
     port=22
     username="username"
     password="password"
