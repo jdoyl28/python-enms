@@ -1,0 +1,127 @@
+import paramiko
+import time
+
+
+
+#get current year and month
+year_month = time.strftime("%Y-%m")
+#get device name from eNMS
+net_dev = '"{}"'.format(device.name)
+#set pool name
+compliant_pool = '"Compliant Audit Scan"'
+#set pool name
+non_compliant_pool = '"Non-compliant Audit Scan"'
+#property string to update inventory device
+prop1_nc = '"Non-compliant"'
+#property string to update inventory device
+prop2_nc = '"-"'
+#nested dictionary to store results from sql queries
+result = {}
+#nest dictionary
+results["result"] = result
+
+
+#Use Paramiko to query enms db and return all device pools associated to device
+def Paramiko_db(command):
+    Addr="192.168.10.25"
+    Port=22
+    User="username"
+    Pass="password"
+    ssh=paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(Addr, Port, User, Pass)
+    stdin, stdout, stderr = ssh.exec_command(command)
+    raw_out = stdout.readlines()
+    result_var = []
+    for raw in raw_out:
+        result_var.append(str(raw.strip("\n")))  
+    return result_var
+    ssh.close()
+    
+#get target device id for the supplied device provided by eNMS
+target_dev = f"sqlite3 /path/to/.db/file 'select id from node where name = {net_dev};\'"
+dev_id = Paramiko_db(target_dev)[0]
+result["dev_id"] = dev_id
+
+#get id and name of pool of compliant pool in the db
+find1 = f"sqlite3 /path/to/.db/file 'select id, name from pool where name = {compliant_pool};\'"
+comp_pool = Paramiko_db(find1)[0]
+result["comp_pool"] = comp_pool
+
+#get pool id of compliance pool
+sliced = slice(0,comp_pool.index("|"))
+comp_pool_id = int(comp_pool[sliced])
+result["comp_pool_id"] = comp_pool_id
+
+#get id and name of pool of non-compliant pool in the db
+find2 = f"sqlite3 /path/to/.db/file 'select id, name from pool where name = {non_compliant_pool};\'"
+no_comp_pool = Paramiko_db(find2)[0]
+result["no_comp_pool"] = no_comp_pool
+
+#get pools that target device is a member of
+find3 = f"sqlite3 /path/to/.db/file 'select node.name, pool.name from node join pool_device_association on node.id = pool_device_association.device_id join pool on pool.id = pool_device_association.pool_id where node.name = {net_dev};\'"
+dev_pool = Paramiko_db(find3)
+result["dev_pool"] = dev_pool
+
+#cmd to set device properties to reflect non-compliance
+no_comp_cmd = f"sqlite3 /path/to/.db/file 'update device set property1 = {prop1_nc}, property2 = {prop2_nc} where id = {dev_id};'"
+
+#Clean retrieved list of device pools from db and add to new list only including device pool name
+dev_pool_clean = []
+for pool in dev_pool:
+    sliced = slice(pool.index("|")+1,len(pool))
+    one_pool = pool[sliced]
+    dev_pool_clean.append(one_pool)
+
+
+#Check if device has been scanned (assigned to scanned_pool)
+if compliant_pool.strip('"') not in dev_pool_clean:
+    #If not in scanned pool, mark False
+    dev_scanned = False
+    results["group status"] = "Device not a member of the Compliant Audit Scan pool and requires a compliance scan"
+    #Then, try to send paramiko/sql to change property1 to non-compliant
+    try:
+        Paramiko_db(no_comp_cmd)
+    except Exception as e:
+        print(e)     
+elif compliant_pool.strip('"') and non_compliant_pool.strip('"') in dev_pool_clean:
+    dev_scanned = False
+    results["group status"] = "Device is present in Compliant Audit Scan and Non-compliant Audit Scan pool. This device will be re-scanned."
+    #Then, try to send paramiko/sql to change property1 to non-compliant and remove from compliant pool
+    try:
+        Paramiko_db(no_comp_cmd)
+    except Exception as e:
+        print(e)
+elif compliant_pool.strip('"') in dev_pool_clean:
+    dev_scanned = True
+    results["group status"] = "Device already present in the Compliant Audit Scan pool"
+    #Check if scan date in device property2 reflects current month
+    if year_month in device.property2:
+        #Add result stating device has current audit scan
+        results["scan status"] = "Scan status is compliant"
+        current_scan = True
+        results["success"] = True
+    #Else if the month is outdated
+    elif year_month not in device.property2:
+        #Set variable to False
+        results["scan status"] = "Scan status is not compliant"
+        current_scan = False
+        #Then, try to send paramiko/sql to change property1 to non-compliant
+        try:
+            Paramiko_db(no_comp_cmd)
+        except Exception as e:
+            print(e)
+
+
+#validate results by checking the device properties
+validate_raw = f"sqlite3 /path/to/.db/file 'select property1, property2 from device where id = {dev_id};'"
+validate_props = Paramiko_db(validate_raw)
+validate_prop1 = validate_props[0].split("|")[0]
+validate_prop2 = validate_props[0].split("|")[1]
+
+if validate_prop1=="Compliant" and validate_prop2==year_month:
+    results["success"] = True
+elif validate_prop1=="Non-Compliant" and validate_prop2=="-":
+    results["success"] = True
+else:
+    results["success"] = False
