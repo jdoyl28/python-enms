@@ -121,7 +121,10 @@ validate_prop2 = validate_props[0].split("|")[1]
 
 if validate_prop1=="Compliant" and validate_prop2==year_month:
     results["success"] = True
-elif validate_prop1=="Non-Compliant" and validate_prop2=="-":
+    results["validation"] = f'Success, property1 and property2 contain valid values for {net_dev}. Values: "{validate_prop1}","{validate_prop2}"'
+elif validate_prop1=="Non-compliant" and validate_prop2=="-":
     results["success"] = True
+    results["validation"] = f'Success, property1 and property2 contain valid values for {net_dev}. Values: "{validate_prop1}","{validate_prop2}"'
 else:
     results["success"] = False
+    results["validation"] = f'Unsuccessful, property1 and property2 do NOT contain valid values for {net_dev}. Values: "{validate_prop1}","{validate_prop2}"'
