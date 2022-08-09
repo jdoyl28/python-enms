@@ -1,0 +1,44 @@
+#panda module for HTML conversion
+#installed on eNMS server
+import pandas
+import pandas as pd
+#pdf conversion module
+#installed on eNMS server
+import pdfkit
+#HTML to DOCX conversion module
+#installed on eNMS server
+from htmldocx import HtmlToDocx
+
+#Retrieve full path of details csv report from Report Results service in workflow
+detail_csv = get_result("report results")["csv_details"]
+#Retrieve only file name of details csv report from Report Results service in workflow
+detail_fn = get_result("report results")["details_name"]
+#Retrieve full path of summary csv report from Report Results service in workflow
+sum_csv = get_result("report results")["csv_sum"]
+#Retrieve only file name of summary csv report from Report Results service in workflow
+summ_fn = get_result("report results")["summ_name"]
+#Assign empty list to result needed for eNMS to report successful completion of service
+result = []
+
+#function to convert csv into html, pdf, and docx format, stored in eNMS /opt/audit_reports/
+def convert_files(report_path,report_name):
+    html_converted = report_name.replace(".csv",".html")
+    pdf_converted = report_name.replace(".csv",".pdf")
+    docx_converted = report_name.replace(".csv",".docx")
+    CSV = pd.read_csv(report_path)
+    CSV.to_html(f"/opt/audit_reports/{html_converted}")
+    pdfkit.from_file(f"/opt/audit_reports/{html_converted}", f"/opt/audit_reports/{pdf_converted}")
+    new_parser = HtmlToDocx()
+    new_parser.parse_html_file(f"/opt/audit_reports/{html_converted}", f"/opt/audit_reports/{docx_converted}")
+
+#call function and provide the details csv as arguments
+convert_files(detail_csv, detail_fn)
+#call function and provide the summary csv as arguments
+convert_files(sum_csv, summ_fn)
+
+
+
+#eNMS requirements to indicate service completion
+result = {}
+results["success"] = True
+results["result"] = result
