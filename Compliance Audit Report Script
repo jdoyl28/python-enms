@@ -1,0 +1,140 @@
+import csv
+from datetime import date
+from pathlib import Path
+
+#today's date used to format file name
+date_today = date.today().isoformat()
+#device name provided by eNMS for device the script is currently running against
+device_name = device.name
+#boolean value retrieved from 1st service in Workflow
+compliance_status = get_result("#07 New Device Compliance Scan Check", device = device.name)["compliant"]
+#List retreived from 2nd service in workflow that includes the audit check numbers
+audit_checks = get_result("#05 Cisco Audit Compliance Check", device = device.name)["audit_checks"]
+#dictionary containing audit check number as key and cli check as value
+num_verbose = get_result("#05 Cisco Audit Compliance Check", device = device.name)["Num_Verbose"]
+#list of failed checks collected during the audit compliance check
+failed_checks = get_result("#05 Cisco Audit Compliance Check", device = device.name)["Failed"]
+#Contains list of audit checks that failed
+failed_sum = len(failed_checks)
+#Contains list of audit checks that passed
+passed_checks = get_result("#05 Cisco Audit Compliance Check", device = device.name)["Passed"]
+#Contains number of passed checks
+passed_sum = len(passed_checks)
+#Contains number of total checks
+checks_sum = failed_sum + passed_sum
+#boolean value retrieved from 3rd service to determine if overall remediation was successful
+remediation_status = get_result("#06 Cisco Audit Compliance Remediation", device = device.name)["success"]
+#Contains the CLI returned from the network device during the remediation process
+rem_results = get_result("#06 Cisco Audit Compliance Remediation")["rem_results"]
+#Includes all above variables in the final results page of the report service
+results["all"] = list((compliance_status, audit_checks, failed_checks, failed_sum, passed_sum, checks_sum, remediation_status, rem_results))
+#Dictionary later used for workflow details report to supply the fieldnames, device name added in advace
+details_dict = {"DEVICE_NAME":device_name,}
+
+#List of words that are used to evaluate if remediation efforts were unsuccessful
+fail_words = ["error", "Error", "failed", "failure", "invalid", "fatal", "unable", "does not exist"]
+#remediation summary. checks if any single string in rem results indicates a failed remediation effort
+for value in rem_results.values():
+    for v in value:
+        if any(word in v for word in fail_words):
+            remediation_status = False
+            break
+        else:
+            remediation_status = True
+
+#Variable to define name of workflow summary report         
+report_sum = "compliance_wkfl_summ_" + date_today + ".csv"
+#Variable to define name of workflow detail report            
+report_details = "compliance_wkfl_detail_"+ date_today + ".csv"
+#Location to store reports after creation or retrieve report files for appending
+report_csv_path = r"/opt/audit_reports/"
+
+
+#generate report_summary
+#Define path for the summary report
+path = Path(report_csv_path + report_sum)
+path_sum = r"/opt/audit_reports/{}".format(report_sum)
+#Determine if the summary report is already existing, based on the bath of date/name structure
+if path.is_file() == False:
+    #If the csv doesn't exist, use CSV module to construct the csv file
+    with open(path, 'w', newline='') as csvfile:
+        fieldnames = ['DEVICE_NAME', 'COMPLIANCE_STATUS', 'AUDIT_CHECKS', 'CHECKS_PASSED', 'CHECKS_FAILED', 'REMEDIATION_STATUS']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow({'DEVICE_NAME': device_name, 'COMPLIANCE_STATUS': compliance_status, 'AUDIT_CHECKS': checks_sum, 'CHECKS_PASSED': passed_sum, 'CHECKS_FAILED': failed_sum, 'REMEDIATION_STATUS': remediation_status})
+#If the csv already exists, open with append ability
+elif path.is_file() == True:
+    with open(path, 'a', newline='') as csvfile:
+        fieldnames = ['DEVICE_NAME', 'COMPLIANCE_STATUS', 'AUDIT_CHECKS', 'CHECKS_PASSED', 'CHECKS_FAILED', 'REMEDIATION_STATUS']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writerow({'DEVICE_NAME': device_name, 'COMPLIANCE_STATUS': compliance_status, 'AUDIT_CHECKS': checks_sum, 'CHECKS_PASSED': passed_sum, 'CHECKS_FAILED': failed_sum, 'REMEDIATION_STATUS': remediation_status})
+
+
+##Define path for the details report
+path = Path(report_csv_path + report_details)
+path_read = r"/opt/audit_reports/{}".format(report_details)
+#create fieldname list for use with CSV module
+fieldnames = ["DEVICE_NAME",]
+x = 1
+#Different devices may contain varying numbers of audit checks, so pre-create 50 total audit checks/status columns and add to fieldnames
+while x < 51:
+    fieldnames.append(f"AUDIT_CHECK_{x}")
+    fieldnames.append(f"REMEDIATION_STATUS_{x}")
+    x += 1
+#If the file doesn't exist, create dictionary that contains audit check # (key) and remediation status (value) determined by detection of words indicating failure    
+if path.is_file() == False:
+    x = 1
+    y = 0
+    for check in failed_checks:
+        details_dict[f"AUDIT_CHECK_{x}"] = audit_checks[y]
+        if check in num_verbose.keys():
+            check_trim = check.replace("_check","")
+            if check_trim in rem_results.keys():
+                for syntax_lines in rem_results[check_trim]:
+                    for line in syntax_lines:
+                        if any(word in v for word in fail_words):
+                            remediation_status = False
+                            break
+                        else:
+                            remediation_status = True
+            details_dict[f"REMEDIATION_STATUS_{x}"] = remediation_status
+            x += 1
+            y += 1
+    #create CSV and add details from the previously created dictionary key/values
+    with open(path_read, 'w' , newline = '') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow(details_dict)
+#If the csv does exist, create dictionary that contains audit check # (key) and remediation status (value) determined by detection of words indicating failure        
+elif path.is_file() == True:
+    x = 1
+    y = 0
+    for check in failed_checks:
+        details_dict[f"AUDIT_CHECK_{x}"] = audit_checks[y]
+        if check in num_verbose.keys():
+            check_trim = check.replace("_check","")
+            if check_trim in rem_results.keys():
+                for syntax_lines in rem_results[check_trim]:
+                    for line in syntax_lines:
+                        if any(word in v for word in fail_words):
+                            remediation_status = False
+                            break
+                        else:
+                            remediation_status = True
+            details_dict[f"REMEDIATION_STATUS_{x}"] = remediation_status
+            x += 1
+            y += 1
+    #Open existing CSV and append using details from the previously created dictionary key/values
+    with open(path_read, 'a' , newline = '') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        #writer.writeheader()
+        writer.writerow(details_dict)
+        
+#Required values to indicate successful service completion in eNMS        
+result = {}
+results["success"] = True
+results["result"] = result
+#Path to details csv for further report usage in workflow
+results["csv_details"] = path_read
+#Path to summary csv for further report usage in workflow
+results["csv_sum"] = path_sum
