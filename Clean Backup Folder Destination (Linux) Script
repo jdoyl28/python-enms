@@ -1,0 +1,116 @@
+import random
+import glob
+import datetime
+from pathlib import Path
+import re
+
+#create empty list
+file_list = []
+
+#device name provided by eNMS
+dev_name = device.name
+
+#back up directory on eNMS server, folder populated via SCP backup script on network devices
+back_dir = "/scp/"
+
+#create empty list of backup file names
+trim_backups = []
+
+#backup list string to backup directory with device name used as file name
+backup_list = glob.glob(f"{back_dir}{dev_name}*")
+
+#for each file in backup directory that includes the device name
+for list_item in backup_list:
+    #clean up file name and remove directory path
+    trim_backups.append(list_item.replace(f"{back_dir}",""))
+
+#set to empty
+backup_count = None    
+
+#count how many file names are in the list
+backup_count = len(trim_backups)
+
+#max number of backups allowed
+backup_threshold = 11
+
+#create empty list to hold result verbose
+verbose_result = []
+
+#if the number of backup files for the device in the backup path is less than the threshold limit, end the script
+if backup_count <= backup_threshold:
+    verbose_result.append("Device has fewer backups than the threshold limit.")
+    result = {}
+    results["verbose"] = verbose_result
+    results["success"] = True
+    exit()
+
+#create empty dictionary
+trim_dict ={}
+
+#for each backup file in the backup list
+for backup in trim_backups:
+    #add file name as key and carve out backup file date in name as they value
+    trim_dict[backup] = backup[len(dev_name)+1:-5]
+
+#extract the dictionary values to isolate the backup file dates and sort
+sorted_dates = sorted(trim_dict.values())
+
+#create empty dictionary
+sorted_dict = {}
+
+#create empty list
+key_list = []
+
+#re-associate backup files and corresponding dates
+#dates were previously extrapolated from the file names and arranged in chronological order
+#to remove backup files by oldest, dates must be re-matched to their applicable backup file name containing the date
+for date in sorted_dates:
+    for key in trim_dict.keys():
+        if trim_dict[key]==date:
+            sorted_dict[key]=date
+            key_list.append(key)
+
+#create empty list
+del_result = []
+
+#create empty list
+temp_list = []
+
+#if backup count exceeds the backup threshold
+if backup_count > backup_threshold:
+    #get number of backups that exceed threshold limit
+    total_rem = backup_count - backup_threshold
+    rem_total = total_rem
+    #set initial value for iterable
+    i = 0
+    #while the total number of backups that need to be removed is more than zero
+    while total_rem > 0:
+        backup = [backup for backup in backup_list if key_list[i] in backup]
+        #replace path with backup name
+        backup = re.sub(r"[\([{})\]]","",str(backup))
+        #remove comma
+        backup = backup.replace("'","")
+        #attempt to remove the backup file and add the result to the del_result list
+        try:
+            p = Path(backup)
+            p.unlink()
+            del_result.append(f"file {backup} successfully deleted.")
+        #if the file is not found, add below message to the del_result list
+        except FileNotFoundError:
+            del_result.append(f"file not found: {backup}.")
+        #subtract one from the total number of backup files that need to be removed to stay within the threshold limit
+        total_rem = total_rem - 1
+        #add to iteration count to use next key in key_list
+        i += 1
+    #tally total number of original backups, backup threshold specified, and how many backups were removed
+    verbose_result = f"Device had a total of {backup_count} backups, exceeding the backup threshold of {backup_threshold} by a total of {rem_total}." 
+    #set dictionary key/value to indicate service status in eNMS
+    results["success"] = True
+
+result = {}
+#include list results in eNMS results output
+results["removed files"] = del_result
+#include list results in eNMS results output
+results["verbose"] = verbose_result
+#include list results in eNMS results output
+results["result"] = result
